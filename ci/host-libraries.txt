@@ -1,0 +1,33 @@
+# Libraries the portable player takes from the system instead of bundling,
+# one extended regular expression per line, matched against the soname.
+# They are part of every desktop install, keep a stable ABI, or must match
+# the system (graphics drivers, display and sound servers).
+
+# C library and compiler runtime
+^ld-linux
+^lib(c|m|dl|pthread|rt|resolv|util|anl)\.so
+^lib(stdc\+\+|gcc_s)\.so
+
+# Graphics drivers
+^lib(GL|GLX|EGL|GLdispatch|OpenGL|GLESv[12]_CM|GLESv2|drm|gbm)\.so
+
+# Display servers
+^libX[a-zA-Z0-9_-]*\.so
+^libxcb
+^libxkbcommon
+^libwayland-
+
+# Sound servers
+^libasound\.so
+^libpulse
+^libjack
+
+# Fonts, compression and the GTK 3 stack
+^lib(fontconfig|freetype|harfbuzz|expat|png16|z|bz2|lzma|zstd|brotli[a-z]*)\.so
+^lib(gtk|gdk)-3\.so
+^lib(glib|gobject|gio|gmodule|gthread)-2\.0\.so
+^lib(pango|pangocairo|pangoft2)-1\.0\.so
+^lib(cairo|cairo-gobject|atk-1\.0|atk-bridge-2\.0|atspi|gdk_pixbuf-2\.0|epoxy|fribidi|thai|datrie|pixman-1|graphite2|ffi|pcre2-8|mount|blkid|selinux|dbus-1|systemd|uuid)\.so
+
+# Network and storage
+^lib(curl|ssl|crypto|sqlite3)\.so

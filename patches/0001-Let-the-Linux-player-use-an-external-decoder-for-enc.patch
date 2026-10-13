@@ -39,11 +39,11 @@ files would decode.
  4 files changed, 103 insertions(+)
 
 diff --git a/Player/CMakeLists.txt b/Player/CMakeLists.txt
-index 0578504..ccba50a 100644
+index 0c002a3..70c13bb 100644
 --- a/Player/CMakeLists.txt
 +++ b/Player/CMakeLists.txt
-@@ -236,6 +236,17 @@ target_precompile_headers(player PRIVATE
- target_link_libraries(player PRIVATE pgmmv_jscocos2d Boost::headers rt)
+@@ -243,6 +243,17 @@ target_include_directories(player PRIVATE ${LIBVLC_INCLUDE_DIRS})
+ target_link_libraries(player PRIVATE pgmmv_jscocos2d Boost::headers rt ${CMAKE_DL_LIBS})
  target_link_options(player PRIVATE -no-pie)
  
 +# Encrypted games need a resource decoder that is kept outside this

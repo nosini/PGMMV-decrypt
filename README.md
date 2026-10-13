@@ -21,16 +21,14 @@ mkdir -p ~/.local/opt
 tar -xzf pgmmv-player-decrypt-*-x86_64.tar.gz -C ~/.local/opt
 ```
 
-The player is built on openSUSE Tumbleweed. On Tumbleweed, install the
-libraries it needs that a desktop may not have yet:
+The player runs on 64-bit x86 Linux distributions from about 2022 onwards,
+such as Ubuntu 22.04, Debian 12, Fedora, Arch and openSUSE Tumbleweed. It
+brings most of its libraries along in its `lib/` folder and uses the ones
+every desktop has from the system: the graphics drivers, X11 or Wayland, the
+sound system, GTK 3, curl, OpenSSL and SQLite.
 
-```
-sudo zypper install libglfw3 libGLEW2_3 libGLU1 libopenal1 libvlc5 libnettle9
-```
-
-Games that play videos also need VLC's plugins (`vlc-noX`). Other distributions
-work if they provide equally recent versions of these libraries; Nettle 4
-(`libnettle.so.9`) is the one older releases lack.
+Games that play videos need VLC installed (`vlc` on most distributions). Without
+it, games still run but skip their videos.
 
 ## Playing a game
 

@@ -8,13 +8,6 @@ calls into the decoder.
 ## Building the player with the decoder
 
 You need the player's build dependencies plus the Nettle development files.
-On openSUSE Tumbleweed, [`ci/dependencies.txt`](../ci/dependencies.txt) lists
-every package:
-
-```
-sudo zypper install $(grep -v '^#' ci/dependencies.txt)
-```
-
 Check out the player at the commit the patches are made for, apply them and
 build with `PGMMV_DECRYPTION_DIR` pointing here:
 
@@ -28,11 +21,46 @@ cmake --build build
 ```
 
 The player's sources mix CRLF and LF line endings. `git apply` keeps them;
-`git am` needs `--keep-cr`. [`ci/build-player.sh`](../ci/build-player.sh) does
-the patch, build, test and packaging steps in one go.
+`git am` needs `--keep-cr`. The player needs GLFW 3.4 or newer.
 
 A patched player built without `PGMMV_DECRYPTION_DIR` refuses encrypted games
 with "this player was built without support for encrypted games".
+
+## The portable build
+
+Released players are built in a Debian 12 container so that they run on
+other distributions too. A program built against an older glibc runs on newer
+ones, and the libraries whose versions differ between distributions are
+bundled:
+
+- [`ci/dependencies.txt`](../ci/dependencies.txt) lists the Debian packages.
+- [`ci/build-glfw.sh`](../ci/build-glfw.sh) builds GLFW 3.5, which Debian 12
+  doesn't have, with X11 and Wayland support.
+- [`ci/build-player.sh`](../ci/build-player.sh) applies the patch, builds and
+  tests the player, installs it into a folder, and packs it.
+- Nettle is linked statically (`-DPGMMV_STATIC_NETTLE=ON`): a bundled
+  `libnettle.so.8` would replace the system's own copy, which the system's
+  GnuTLS may need in a newer version.
+- [`ci/bundle-libs.py`](../ci/bundle-libs.py) copies every library the
+  player needs into `lib/`, except those listed in
+  [`ci/host-libraries.txt`](../ci/host-libraries.txt), and points the player
+  at that folder with a relative run path. The listed libraries come from the
+  system: glibc, the graphics drivers, X11 and Wayland, the sound servers,
+  GTK 3, curl, OpenSSL and SQLite. The Debian copyright files of the bundled
+  libraries go into `share/pgmmv-player/licenses/libraries/`.
+
+The player loads libvlc itself when a game plays a movie, so VLC isn't
+bundled either: without it, the player runs and skips movies.
+
+To build the same tarball locally with Podman:
+
+```
+podman run --rm -v "$PWD":/work:Z -w /work debian:12 sh -c '
+    apt-get update && apt-get install -y --no-install-recommends \
+        $(grep -v "^#" PGMMV-decrypt/ci/dependencies.txt) &&
+    sh PGMMV-decrypt/ci/build-glfw.sh &&
+    sh PGMMV-decrypt/ci/build-player.sh PGMMV-decrypt pgmmv dist local'
+```
 
 ## Updating the patch
 
@@ -66,7 +94,7 @@ player is described in [format.md](format.md).
 
 ## Continuous integration and releases
 
-`.github/workflows/build.yml` runs in an openSUSE Tumbleweed container. The
+`.github/workflows/build.yml` runs in Debian 12 containers. The
 decoder tests run on every push and pull request. The player build runs when
 started by hand from the Actions tab, which leaves the tarball as a workflow
 artifact, and for tags starting with `v`. A tag also creates a GitHub release
