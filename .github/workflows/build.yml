@@ -1,0 +1,95 @@
+name: Build
+
+# Decoder tests run on every push and pull request. The full player build
+# (about 15 minutes) runs for version tags, which also publish a release, and
+# on demand from the Actions tab.
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Decoder tests
+    runs-on: ubuntu-latest
+    container: registry.opensuse.org/opensuse/tumbleweed:latest
+    steps:
+      - name: Install build tools
+        run: zypper -n install --no-recommends cmake ninja gcc-c++ pkgconf libnettle-devel git tar gzip
+      - uses: actions/checkout@v5
+      - name: Build and test
+        run: |
+          cmake -S . -B build -G Ninja
+          cmake --build build
+          ctest --test-dir build --output-on-failure
+
+  player:
+    name: Player
+    needs: test
+    if: github.ref_type == 'tag' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    container: registry.opensuse.org/opensuse/tumbleweed:latest
+    steps:
+      - name: Install git
+        run: zypper -n install --no-recommends git tar gzip
+      - uses: actions/checkout@v5
+        with:
+          path: decrypt
+      - name: Read the player commit the patches apply to
+        id: base
+        run: echo "commit=$(cat decrypt/patches/base-commit)" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@v5
+        with:
+          repository: nosini/PGMMV
+          ref: ${{ steps.base.outputs.commit }}
+          path: pgmmv
+      - name: Install build dependencies
+        run: zypper -n install --no-recommends $(grep -v '^#' decrypt/ci/dependencies.txt)
+      - name: Build, test and pack
+        run: |
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            version=$GITHUB_REF_NAME
+          else
+            version=dev-$(echo "$GITHUB_SHA" | cut -c1-7)
+          fi
+          sh decrypt/ci/build-player.sh decrypt pgmmv dist "$version"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: player
+          path: dist/*.tar.gz
+          if-no-files-found: error
+
+  release:
+    name: Release
+    needs: player
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: player
+          path: dist
+      - name: Create or update the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          # Tags with a suffix such as v1.0-rc1 are prereleases.
+          case "$TAG" in
+            *-*) prerelease="--prerelease --latest=false" ;;
+            *) prerelease="" ;;
+          esac
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            if [ -n "$prerelease" ]; then gh release edit "$TAG" $prerelease; fi
+            gh release upload "$TAG" dist/*.tar.gz --clobber
+          else
+            gh release create "$TAG" dist/*.tar.gz --verify-tag --generate-notes $prerelease
+          fi
