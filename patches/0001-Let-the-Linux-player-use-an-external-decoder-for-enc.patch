@@ -1,0 +1,239 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Nosini <git@nosini.eu>
+Date: Tue, 13 Oct 2026 11:15:13 +0000
+Subject: [PATCH] Let the Linux player use an external decoder for encrypted
+ games
+
+Games exported with encryption store their project data, images and
+audio encrypted. The published player sources contain no decoder, so
+the Linux player read the encrypted bytes as plain data and failed in
+unpredictable ways.
+
+With this patch, CMake takes PGMMV_DECRYPTION_DIR, the source directory
+of pgmmv-linux-decryption; it is added as a subdirectory, its
+pgmmv_decryption library is linked into the player, and
+FileUtils-runtime.cpp is compiled with PGMMV_DECRYPTION.
+
+FileUtilsRuntime::setResourceKey hands the base64 "key" value of
+data/info.json, or none for games without one, to the decoder.
+getContents then decodes encrypted files in memory and passes plain
+files through unchanged. For an encrypted project, AppDelegate sets the
+key and checks that data/project.json decodes to a JSON object before
+the loader uses it, so a wrong or unsupported key ends with a message
+and exit status 1 instead of a crash. A player built without the
+decoder stops with "this player was built without support for
+encrypted games".
+
+The player clears the key with setKey("") while it reads its own
+resources, then restores the value it saved from key(). With the
+decoder, setKey("") only pauses decoding and any other value resumes
+it, and key() reports a non-empty value while a game key is set.
+Otherwise a game without key metadata, whose key is empty, would stay
+paused once the logo screen had read an encrypted logo, and none of its
+files would decode.
+---
+ Player/CMakeLists.txt                         | 11 ++++
+ Player/Classes/AppDelegate.cpp                | 31 +++++++++++
+ .../Classes/Lib/Runtime/FileUtils-runtime.cpp | 55 +++++++++++++++++++
+ .../Classes/Lib/Runtime/FileUtils-runtime.h   |  6 ++
+ 4 files changed, 103 insertions(+)
+
+diff --git a/Player/CMakeLists.txt b/Player/CMakeLists.txt
+index 0578504..ccba50a 100644
+--- a/Player/CMakeLists.txt
++++ b/Player/CMakeLists.txt
+@@ -236,6 +236,17 @@ target_precompile_headers(player PRIVATE
+ target_link_libraries(player PRIVATE pgmmv_jscocos2d Boost::headers rt)
+ target_link_options(player PRIVATE -no-pie)
+ 
++# Encrypted games need a resource decoder that is kept outside this
++# repository. Point PGMMV_DECRYPTION_DIR at its source directory to build it
++# in; without it, the player refuses encrypted games.
++set(PGMMV_DECRYPTION_DIR "" CACHE PATH "Source directory of the resource decoder for encrypted games")
++if(PGMMV_DECRYPTION_DIR)
++    add_subdirectory(${PGMMV_DECRYPTION_DIR} decryption)
++    target_link_libraries(player PRIVATE pgmmv_decryption)
++    set_property(SOURCE Classes/Lib/Runtime/FileUtils-runtime.cpp
++        APPEND PROPERTY COMPILE_DEFINITIONS PGMMV_DECRYPTION)
++endif()
++
+ # The player's own resources, for game folders that don't include them (editor
+ # projects). The player looks in resources/ next to itself, then in
+ # ../share/pgmmv-player (see proj.linux/main.cpp).
+diff --git a/Player/Classes/AppDelegate.cpp b/Player/Classes/AppDelegate.cpp
+index 078e875..176d68e 100644
+--- a/Player/Classes/AppDelegate.cpp
++++ b/Player/Classes/AppDelegate.cpp
+@@ -380,9 +380,11 @@ bool AppDelegate::applicationDidFinishLaunching() {
+ 	}
+ #endif
+ #ifdef USE_RUNTIME
++	bool encryptedProject = false;
+ 	{
+ 		auto projectJson = FileUtils::getInstance()->getStringFromFile(projectFilePath);
+ 		if (strncmp(projectJson.c_str(), "enc", 3) == 0) {
++			encryptedProject = true;
+ 			GameManager::getInstance()->setEncryptSaveFile(true);
+ 		}
+ 	}
+@@ -404,6 +406,12 @@ bool AppDelegate::applicationDidFinishLaunching() {
+ 	doc.Parse(jsonData.c_str());
+ 	bool error = doc.HasParseError() || !doc.IsObject();
+ 	if (error) {
++#if (CC_TARGET_PLATFORM == CC_PLATFORM_LINUX)
++		if (encryptedProject && !jsonData.empty()) {
++			fprintf(stderr, "player: encrypted game has invalid data/info.json\n");
++			return false;
++		}
++#endif
+ 		CCASSERT(0, "Error: Json Parse.");
+ 	}
+ 	else {
+@@ -412,6 +420,29 @@ bool AppDelegate::applicationDidFinishLaunching() {
+ 			GameManager::getInstance()->setProjectFolderSave(true);
+ 		}
+ 	}
++#if (CC_TARGET_PLATFORM == CC_PLATFORM_LINUX)
++	if (encryptedProject) {
++		auto runtimeFiles = static_cast<FileUtilsRuntime *>(FileUtils::getInstance());
++		const rapidjson::Value *key = !error && doc.HasMember("key") ? &doc["key"] : nullptr;
++		if (key && !key->IsString()) {
++			fprintf(stderr, "player: encrypted game key must be a string\n");
++			return false;
++		}
++		if (auto keyError = runtimeFiles->setResourceKey(key ? key->GetString() : nullptr,
++			key ? key->GetStringLength() : 0)) {
++			fprintf(stderr, "player: %s\n", keyError);
++			return false;
++		}
++		// Reject a wrong key before the game loader uses unchecked JSON fields.
++		auto projectJson = runtimeFiles->getStringFromFile(projectFilePath);
++		rapidjson::Document project;
++		project.Parse(projectJson.c_str());
++		if (project.HasParseError() || !project.IsObject()) {
++			fprintf(stderr, "player: cannot decode data/project.json (invalid key or unsupported encryption)\n");
++			return false;
++		}
++	}
++#endif
+ #endif
+ 	GameManager *gm = GameManager::getInstance();
+ #ifdef USE_RUNTIME
+diff --git a/Player/Classes/Lib/Runtime/FileUtils-runtime.cpp b/Player/Classes/Lib/Runtime/FileUtils-runtime.cpp
+index df88da8..053e76f 100644
+--- a/Player/Classes/Lib/Runtime/FileUtils-runtime.cpp
++++ b/Player/Classes/Lib/Runtime/FileUtils-runtime.cpp
+@@ -9,6 +9,9 @@
+ #endif
+ #include "platform/CCCommon.h"
+ #include "FileUtils-runtime.h"
++#if (CC_TARGET_PLATFORM == CC_PLATFORM_LINUX) && defined(PGMMV_DECRYPTION)
++#include "EncryptedResources.h"
++#endif
+ 
+ using namespace std;
+ 
+@@ -20,6 +23,13 @@ NS_CC_BEGIN
+ //static FileUtilsWin32 *s_platformFileUtils = nullptr;
+ #endif
+ static char s_key[16 + 1];
++#if (CC_TARGET_PLATFORM == CC_PLATFORM_LINUX) && defined(PGMMV_DECRYPTION)
++// Encrypted games on Linux are read by an external decoder, built in with
++// CMake's PGMMV_DECRYPTION_DIR.
++static pgmmv::ResourceKey s_resourceKey;
++// The player clears the key while it reads its own resources, see setKey.
++static bool s_resourceKeySuspended = false;
++#endif
+ 
+ // The root path of resources, the character encoding is UTF-8.
+ // UTF-8 is the only encoding supported by cocos2d-x API.
+@@ -56,13 +66,34 @@ void FileUtilsRuntime::createAndSet()
+ void FileUtilsRuntime::setKey(const std::string &key)
+ {
+ 	memcpy(s_key, key.c_str(), key.size() + 1);
++#if (CC_TARGET_PLATFORM == CC_PLATFORM_LINUX) && defined(PGMMV_DECRYPTION)
++	// Callers save key(), call setKey("") and later restore the saved value.
++	// The game key itself is set only by setResourceKey.
++	s_resourceKeySuspended = key.empty();
++#endif
+ }
+ 
+ const char *FileUtilsRuntime::key()
+ {
++#if (CC_TARGET_PLATFORM == CC_PLATFORM_LINUX) && defined(PGMMV_DECRYPTION)
++	// Not empty while a game key is active, even for the keyless legacy
++	// cipher, so that restoring the saved value resumes decoding.
++	if (s_resourceKey.available) return s_resourceKeySuspended ? "" : "game";
++#endif
+ 	return s_key;
+ }
+ 
++#if (CC_TARGET_PLATFORM == CC_PLATFORM_LINUX)
++const char *FileUtilsRuntime::setResourceKey(const char *base64, size_t length)
++{
++#ifdef PGMMV_DECRYPTION
++	return pgmmv::loadResourceKey(base64, length, s_resourceKey);
++#else
++	return "this player was built without support for encrypted games";
++#endif
++}
++#endif
++
+ #if 0
+ bool FileUtilsRuntime::init()
+ {
+@@ -144,6 +175,29 @@ bool FileUtilsRuntime::removeDirectory(const std::string& dirPath)
+ 
+ FileUtils::Status FileUtilsRuntime::getContents(const std::string& filename, ResizableBuffer* buffer) const
+ {
++#if (CC_TARGET_PLATFORM == CC_PLATFORM_LINUX) && defined(PGMMV_DECRYPTION)
++	if (!s_resourceKey.available || s_resourceKeySuspended) return FileUtilsLinux::getContents(filename, buffer);
++	Data data;
++	ResizableBufferAdapter<Data> raw(&data);
++	auto status = FileUtilsLinux::getContents(filename, &raw);
++	if (status != FileUtils::Status::OK) return status;
++	std::vector<uint8_t> decoded;
++	auto result = pgmmv::decodeResource(data.getBytes(), data.getSize(), s_resourceKey, decoded);
++	if (result == pgmmv::ResourceStatus::Plain) {
++		buffer->resize(data.getSize());
++		if (data.getSize()) memcpy(buffer->buffer(), data.getBytes(), data.getSize());
++		return status;
++	}
++	if (result != pgmmv::ResourceStatus::Decoded) {
++		fprintf(stderr, "player: cannot decode encrypted resource %s (%s)\n", filename.c_str(),
++			result == pgmmv::ResourceStatus::InvalidHeader ? "invalid header" : "missing key");
++		buffer->resize(0);
++		return FileUtils::Status::ReadFailed;
++	}
++	buffer->resize(decoded.size());
++	if (!decoded.empty()) memcpy(buffer->buffer(), decoded.data(), decoded.size());
++	return FileUtils::Status::OK;
++#else
+ 	if (strlen(s_key) == 0) {
+ // #AGTK-NX
+ #if (CC_TARGET_PLATFORM == CC_PLATFORM_WIN32)
+@@ -172,6 +226,7 @@ FileUtils::Status FileUtilsRuntime::getContents(const std::string& filename, Res
+ 	memcpy(buffer->buffer(), d.getBytes(), d.getSize());
+ 	d.clear();
+ 	return status;
++#endif
+ }
+ 
+ #if 0
+diff --git a/Player/Classes/Lib/Runtime/FileUtils-runtime.h b/Player/Classes/Lib/Runtime/FileUtils-runtime.h
+index 68811fc..0662eec 100644
+--- a/Player/Classes/Lib/Runtime/FileUtils-runtime.h
++++ b/Player/Classes/Lib/Runtime/FileUtils-runtime.h
+@@ -39,6 +39,12 @@ public:
+ 	static void createAndSet();
+ 	void setKey(const std::string &key);
+ 	const char *key();
++#if (CC_TARGET_PLATFORM == CC_PLATFORM_LINUX)
++	// Sets the key of an encrypted game from the base64 "key" value of
++	// data/info.json (nullptr if it has none). Returns nullptr on success,
++	// otherwise a message for the user.
++	const char *setResourceKey(const char *base64, size_t length);
++#endif
+ #if 0
+ 	bool init();
+ 	virtual std::string getWritablePath() const override;
