@@ -101,6 +101,15 @@ artifact, and for tags starting with `v`. A tag also creates a GitHub release
 with the tarball attached; tags with a suffix, such as `v1.0-rc1`, become
 prereleases.
 
+The player uses a Release build and caches compiler results with ccache,
+including GLFW and the player's precompiled headers. Each successful run
+saves its accumulated cache; cache hit statistics appear in the build log.
+GitHub lets tag builds restore caches from the default branch, but not from
+other tags. A manual build on `main` seeds a cache for later releases.
+
+Release reruns replace existing tarballs and publish any draft left by an
+interrupted run. Publication fails if no player tarballs were downloaded.
+
 ```
 git tag v1.0
 git push origin v1.0

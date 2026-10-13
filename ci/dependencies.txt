@@ -2,6 +2,8 @@
 build-essential
 cmake
 ninja-build
+ccache
+zstd
 pkg-config
 git
 ca-certificates

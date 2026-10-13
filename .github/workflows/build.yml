@@ -1,7 +1,7 @@
 name: Build
 
 # Decoder tests run on every push and pull request. The full player build
-# (about 20 minutes) runs for version tags, which also publish a release, and
+# runs for version tags, which also publish a release, and
 # on demand from the Actions tab. Both use Debian 12: the player is built on
 # that older glibc and bundles its other libraries, so it runs on current
 # distributions in general.
@@ -38,6 +38,15 @@ jobs:
     if: github.ref_type == 'tag' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     container: debian:12
+    env:
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      CCACHE_BASEDIR: ${{ github.workspace }}
+      CCACHE_COMPILERCHECK: content
+      CCACHE_MAXSIZE: 1G
+      # CMake includes precompiled headers with -include, as ccache requires.
+      CCACHE_SLOPPINESS: pch_defines,time_macros
+      CMAKE_C_COMPILER_LAUNCHER: ccache
+      CMAKE_CXX_COMPILER_LAUNCHER: ccache
     steps:
       - name: Install git
         run: |
@@ -56,6 +65,16 @@ jobs:
           path: pgmmv
       - name: Install build dependencies
         run: apt-get install -y --no-install-recommends $(grep -v '^#' decrypt/ci/dependencies.txt)
+      - name: Cache compiler results
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          # Cache entries are immutable; each run saves its accumulated results.
+          key: ${{ runner.os }}-debian12-player-ccache-v1-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            ${{ runner.os }}-debian12-player-ccache-v1-
+      - name: Reset cache statistics
+        run: ccache --zero-stats
       - name: Build GLFW
         run: sh decrypt/ci/build-glfw.sh
       - name: Build, test and pack
@@ -66,6 +85,9 @@ jobs:
             version=dev-$(echo "$GITHUB_SHA" | cut -c1-7)
           fi
           sh decrypt/ci/build-player.sh decrypt pgmmv dist "$version"
+      - name: Show cache statistics
+        if: always()
+        run: ccache --show-stats
       - uses: actions/upload-artifact@v4
         with:
           name: player
@@ -90,6 +112,11 @@ jobs:
           GH_REPO: ${{ github.repository }}
           TAG: ${{ github.ref_name }}
         run: |
+          set -- dist/*.tar.gz
+          if [ ! -f "$1" ]; then
+            echo "No player tarballs were downloaded; refusing to publish a release." >&2
+            exit 1
+          fi
           # Tags with a suffix such as v1.0-rc1 are prereleases.
           case "$TAG" in
             *-*) prerelease="--prerelease --latest=false" ;;
@@ -97,7 +124,9 @@ jobs:
           esac
           if gh release view "$TAG" >/dev/null 2>&1; then
             if [ -n "$prerelease" ]; then gh release edit "$TAG" $prerelease; fi
-            gh release upload "$TAG" dist/*.tar.gz --clobber
+            gh release upload "$TAG" "$@" --clobber
           else
-            gh release create "$TAG" dist/*.tar.gz --verify-tag --generate-notes $prerelease
+            gh release create "$TAG" "$@" --verify-tag --generate-notes $prerelease
           fi
+          # Recover drafts left by an interrupted create/upload/publish sequence.
+          gh release edit "$TAG" --draft=false

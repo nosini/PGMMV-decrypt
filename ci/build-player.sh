@@ -18,7 +18,8 @@ stage=stage/$name
 # The player sources mix CRLF and LF line endings; git apply keeps them.
 git -C "$player" apply "$decrypt"/patches/*.patch
 
-cmake -S "$player/Player" -B build -G Ninja -DPGMMV_CONFIGURATION=Runtime \
+cmake -S "$player/Player" -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
+    -DPGMMV_CONFIGURATION=Runtime \
     -DPGMMV_DECRYPTION_DIR="$decrypt" -DPGMMV_STATIC_NETTLE=ON
 cmake --build build
 ctest --test-dir build --output-on-failure
