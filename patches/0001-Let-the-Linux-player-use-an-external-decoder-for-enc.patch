@@ -32,17 +32,17 @@ Otherwise a game without key metadata, whose key is empty, would stay
 paused once the logo screen had read an encrypted logo, and none of its
 files would decode.
 ---
- Player/CMakeLists.txt                         | 11 ++++
- Player/Classes/AppDelegate.cpp                | 31 +++++++++++
- .../Classes/Lib/Runtime/FileUtils-runtime.cpp | 55 +++++++++++++++++++
- .../Classes/Lib/Runtime/FileUtils-runtime.h   |  6 ++
+ Player/CMakeLists.txt                            | 11 +++++
+ Player/Classes/AppDelegate.cpp                   | 31 +++++++++++++
+ Player/Classes/Lib/Runtime/FileUtils-runtime.cpp | 55 ++++++++++++++++++++++++
+ Player/Classes/Lib/Runtime/FileUtils-runtime.h   |  6 +++
  4 files changed, 103 insertions(+)
 
 diff --git a/Player/CMakeLists.txt b/Player/CMakeLists.txt
-index 0c002a3..70c13bb 100644
+index dcc3a60..916c8e7 100644
 --- a/Player/CMakeLists.txt
 +++ b/Player/CMakeLists.txt
-@@ -243,6 +243,17 @@ target_include_directories(player PRIVATE ${LIBVLC_INCLUDE_DIRS})
+@@ -240,6 +240,17 @@ target_include_directories(player PRIVATE ${LIBVLC_INCLUDE_DIRS})
  target_link_libraries(player PRIVATE pgmmv_jscocos2d Boost::headers rt ${CMAKE_DL_LIBS})
  target_link_options(player PRIVATE -no-pie)
  
@@ -61,7 +61,7 @@ index 0c002a3..70c13bb 100644
  # projects). The player looks in resources/ next to itself, then in
  # ../share/pgmmv-player (see proj.linux/main.cpp).
 diff --git a/Player/Classes/AppDelegate.cpp b/Player/Classes/AppDelegate.cpp
-index 078e875..176d68e 100644
+index ed778aa..32c18f2 100644
 --- a/Player/Classes/AppDelegate.cpp
 +++ b/Player/Classes/AppDelegate.cpp
 @@ -380,9 +380,11 @@ bool AppDelegate::applicationDidFinishLaunching() {
@@ -76,7 +76,7 @@ index 078e875..176d68e 100644
  			GameManager::getInstance()->setEncryptSaveFile(true);
  		}
  	}
-@@ -404,6 +406,12 @@ bool AppDelegate::applicationDidFinishLaunching() {
+@@ -398,6 +400,12 @@ bool AppDelegate::applicationDidFinishLaunching() {
  	doc.Parse(jsonData.c_str());
  	bool error = doc.HasParseError() || !doc.IsObject();
  	if (error) {
@@ -89,7 +89,7 @@ index 078e875..176d68e 100644
  		CCASSERT(0, "Error: Json Parse.");
  	}
  	else {
-@@ -412,6 +420,29 @@ bool AppDelegate::applicationDidFinishLaunching() {
+@@ -406,6 +414,29 @@ bool AppDelegate::applicationDidFinishLaunching() {
  			GameManager::getInstance()->setProjectFolderSave(true);
  		}
  	}
@@ -117,8 +117,8 @@ index 078e875..176d68e 100644
 +	}
 +#endif
  #endif
- 	GameManager *gm = GameManager::getInstance();
- #ifdef USE_RUNTIME
+ #if (CC_TARGET_PLATFORM == CC_PLATFORM_LINUX)
+ 	// The player's own scripts, fonts and images for game folders without them, after the game.
 diff --git a/Player/Classes/Lib/Runtime/FileUtils-runtime.cpp b/Player/Classes/Lib/Runtime/FileUtils-runtime.cpp
 index df88da8..053e76f 100644
 --- a/Player/Classes/Lib/Runtime/FileUtils-runtime.cpp
